@@ -1,5 +1,6 @@
-__marimo__
-.venv
+__marimo__/
+.venv/
+data/
 pyproject.toml
 uv.lock
 CIDDS-001.zip
