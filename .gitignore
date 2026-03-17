@@ -1,2 +1,5 @@
-CIDDS-001/
-venv/
+__marimo__
+.venv
+pyproject.toml
+uv.lock
+CIDDS-001.zip

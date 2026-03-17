@@ -1,11 +1,36 @@
-pandas 
-numpy 
-matplotlib 
-scikit-learn
-seaborn
-tensorflow
-keras
-xgboost
-lightgbm
-ipykernel
-
+#requests
+#altair
+basedpyright
+bokeh-sampledata
+dataset
+datasets
+datashader
+duckdb
+great-tables
+holoviews
+#huggingface
+hvplot
+ipywidgets
+marimo
+matplotlib
+#numba
+# numpy
+# pandas
+# plotly
+polars
+# pooch
+# postgres
+# python-lsp-server
+#quarto
+ruff
+#scikit-learn
+# seaborn
+# sqlglot
+# statsmodels
+# tensor
+#torch
+ty
+# xgboost
+#cupy
+#torchmetrics
+#aim
