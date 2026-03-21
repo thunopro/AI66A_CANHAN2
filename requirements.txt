@@ -34,3 +34,4 @@ ty
 #cupy
 #torchmetrics
 #aim
+fastparquet

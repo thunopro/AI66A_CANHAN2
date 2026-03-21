@@ -4,3 +4,4 @@ data/
 pyproject.toml
 uv.lock
 CIDDS-001.zip
+/CIDDS-001
