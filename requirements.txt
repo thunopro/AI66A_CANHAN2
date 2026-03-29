@@ -8,6 +8,7 @@ datashader
 duckdb
 great-tables
 holoviews
+scikit-learn
 #huggingface
 hvplot
 ipywidgets
