@@ -1,20 +1,22 @@
 import pandas as pd
 import numpy as np
-import tensorflow as tf
+import gc
 from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, f1_score
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout
-from tensorflow.keras.optimizers import Adam
 
-# Giả sử bạn đã load df
+print("======================================================")
+print("   BẮT ĐẦU CHẠY FULL DATA: CHỈ TEST RANDOM FOREST     ")
+print("======================================================")
+
+# ==========================================
+# 1. LOAD VÀ TIỀN XỬ LÝ CHUNG
+# ==========================================
 file_path = "data/CIDDS-001-Sampled-Data.parquet"
 df = pd.read_parquet(file_path)
+print(f"-> Đã nạp thành công {len(df)} dòng dữ liệu gốc.")
 
-print("--- 1. TIỀN XỬ LÝ VÀ CHUẨN HÓA DỮ LIỆU ---")
-# 1.1. Làm sạch cột 'Bytes'
 def clean_bytes(val):
     if pd.isna(val): return 0.0
     val = str(val).strip().upper()
@@ -24,102 +26,86 @@ def clean_bytes(val):
 
 df['Bytes'] = df['Bytes'].apply(clean_bytes)
 
-# 1.2. Chọn 10 features cốt lõi
-features = [
-    'Src IP Addr', 'Src Pt', 'Dst IP Addr', 'Dst Pt', 
-    'Proto', 'Flags', 'Tos', 'Duration', 'Bytes', 'Packets'
-]
+features = ['Src IP Addr', 'Src Pt', 'Dst IP Addr', 'Dst Pt', 'Proto', 'Flags', 'Tos', 'Duration', 'Bytes', 'Packets']
 X = df[features].copy()
 y = df['attackType'].copy()
 
-# 1.3. Frequency Encoding cho các cột Categorical
-cat_cols = X.select_dtypes(include=['object', 'string', 'category']).columns.tolist()
-for col in cat_cols:
-    freq = X[col].value_counts(normalize=True)
-    X[col] = X[col].map(freq).fillna(0)
+del df
+gc.collect()
 
-# 1.4. Scale dữ liệu về [0, 1] và Label Encode nhãn
-X = X.astype(float)
+# ==========================================
+# 2. CHIA TẬP TRAIN/TEST VÀ CHUẨN HÓA
+# ==========================================
+print("\n-> Đang chia tập Train/Test theo thời gian...")
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, shuffle=False)
+
+print("-> Đang thực hiện Frequency Encoding và Min-Max Scaling...")
+cat_cols = X_train.select_dtypes(include=['object', 'string', 'category']).columns.tolist()
+for col in cat_cols:
+    freq = X_train[col].value_counts(normalize=True)
+    X_train[col] = X_train[col].map(freq).fillna(0)
+    X_test[col] = X_test[col].map(freq).fillna(0)
+
+X_train, X_test = X_train.astype(np.float32), X_test.astype(np.float32) 
 scaler = MinMaxScaler()
-X_scaled = scaler.fit_transform(X)
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
 
 label_encoder = LabelEncoder()
-y_encoded = label_encoder.fit_transform(y)
+y_train_encoded = label_encoder.fit_transform(y_train)
+y_test_encoded = label_encoder.transform(y_test)
 
+# ==========================================
+# 3. TẠO CHUỖI MULTI-FLOW TỐI ƯU
+# ==========================================
+# BẠN CÓ THỂ ĐỔI THÀNH 70 Ở ĐÂY ĐỂ KIỂM CHỨNG SỰ TỤT DỐC CỦA RF
+window_rf = 10 
+print(f"\n-> Đang tạo ma trận chuỗi 3D cho RF (Window = {window_rf})...")
 
-print("\n--- 2. TẠO CHUỖI MULTI-FLOW (WINDOW = 10) ---")
-def create_sequences(X_data, y_data, window_size=10):
-    X_seq, y_seq = [], []
-    # Trượt qua dữ liệu để lấy 10 luồng liên tiếp
-    for i in range(len(X_data) - window_size):
-        X_seq.append(X_data[i : i + window_size])
-        y_seq.append(y_data[i + window_size])
-    return np.array(X_seq), np.array(y_seq)
+def create_sequences_optimized(X_data, y_data, window_size):
+    n_samples = len(X_data) - window_size + 1
+    X_seq = np.zeros((n_samples, window_size, X_data.shape[1]), dtype=np.float32)
+    y_seq = np.zeros((n_samples,), dtype=y_data.dtype)
+    for i in range(window_size - 1, len(X_data)):
+        idx = i - window_size + 1
+        X_seq[idx] = X_data[idx : i + 1] 
+        y_seq[idx] = y_data[i]           
+    return X_seq, y_seq
 
-window_size = 10
-X_seq, y_seq = create_sequences(X_scaled, y_encoded, window_size)
-print(f"Kích thước ma trận 3D tạo thành: {X_seq.shape}")
+X_train_seq_rf, y_train_seq_rf = create_sequences_optimized(X_train_scaled, y_train_encoded, window_rf)
+X_test_seq_rf, y_test_seq_rf = create_sequences_optimized(X_test_scaled, y_test_encoded, window_rf)
 
+# ==========================================
+# 4. HUẤN LUYỆN MÔ HÌNH RANDOM FOREST
+# ==========================================
+print("\n======================================================")
+print(f"   HUẤN LUYỆN RANDOM FOREST (LÀM PHẲNG WINDOW = {window_rf})")
+print("======================================================")
 
-print("\n--- 3. CHIA TẬP TRAIN/TEST (KHÔNG SHUFFLE) ---")
-# QUAN TRỌNG: shuffle=False để bảo toàn trình tự thời gian của chuỗi Multi-flow [cite: 268, 592]
-X_train_seq, X_test_seq, y_train_seq, y_test_seq = train_test_split(
-    X_seq, y_seq, test_size=0.3, shuffle=False
-)
+# Làm phẳng mảng 3D thành 2D để đưa vào RF
+X_train_flat = X_train_seq_rf.reshape(X_train_seq_rf.shape[0], -1)
+X_test_flat = X_test_seq_rf.reshape(X_test_seq_rf.shape[0], -1)
 
-# Chuyển nhãn sang One-Hot Encoding cho mô hình LSTM
-y_train_categorical = tf.keras.utils.to_categorical(y_train_seq)
-y_test_categorical = tf.keras.utils.to_categorical(y_test_seq)
-
-
-print("\n--- 4. HUẤN LUYỆN RANDOM FOREST (MULTI-FLOW BỊ LÀM PHẲNG) ---")
-# RF không hiểu được 3D nên phải làm phẳng ma trận (Samples, 10, 10) -> (Samples, 100) [cite: 585, 640]
-X_train_flat = X_train_seq.reshape(X_train_seq.shape[0], -1)
-X_test_flat = X_test_seq.reshape(X_test_seq.shape[0], -1)
-
+# Cấu hình RF chuẩn theo Paper 2
 rf_multi = RandomForestClassifier(
-    n_estimators=100,            # Cấu hình theo Paper 2 [cite: 434]
-    max_depth=35,                # Giới hạn độ sâu để tránh quá khớp [cite: 434]
-    max_features='sqrt',         # Dùng căn bậc 2 số đặc trưng [cite: 434]
-    class_weight='balanced',     # Paper 2 có dùng class_weight [cite: 431, 434]
-    n_jobs=-1,
+    n_estimators=100, 
+    max_depth=35, 
+    max_features=100, 
+    class_weight='balanced', 
+    n_jobs=-1, 
     random_state=42
 )
-rf_multi.fit(X_train_flat, y_train_seq)
+
+print("-> Đang huấn luyện Random Forest... (Vui lòng chờ vài phút)")
+rf_multi.fit(X_train_flat, y_train_seq_rf)
+
+print("-> Đang dự đoán tập Test...")
 rf_multi_preds = rf_multi.predict(X_test_flat)
 
-print(f"-> F1-Score của Random Forest Multi-flow: {f1_score(y_test_seq, rf_multi_preds, average='macro'):.4f}")
+# Tìm các nhãn thực sự có trong tập test của chuỗi
+labels_in_test_rf = np.unique(y_test_seq_rf)
+names_in_test_rf = label_encoder.inverse_transform(labels_in_test_rf)
 
-
-print("\n--- 5. HUẤN LUYỆN DEEP LEARNING LSTM (MULTI-FLOW NGUYÊN BẢN 3D) ---")
-# Cấu hình LSTM theo Bảng 6 của Paper 2 [cite: 577]
-lstm_model = Sequential([
-    LSTM(100, return_sequences=True, input_shape=(window_size, X_seq.shape[2]), activation='tanh'),
-    Dropout(0.2),
-    LSTM(100, return_sequences=False, activation='tanh'),
-    Dropout(0.2),
-    Dense(len(label_encoder.classes_), activation='softmax')
-])
-
-lstm_model.compile(
-    optimizer=Adam(learning_rate=0.001), 
-    loss='categorical_crossentropy', 
-    metrics=['accuracy']
-)
-
-# Chạy với 5 epochs để test (Paper gốc dùng 50 epochs, nhưng 5 là đủ để thấy xu hướng) [cite: 580]
-lstm_model.fit(
-    X_train_seq, y_train_categorical, 
-    epochs=5, 
-    batch_size=1024, 
-    validation_split=0.1, 
-    verbose=1
-)
-
-# Đánh giá LSTM
-lstm_preds_probs = lstm_model.predict(X_test_seq)
-lstm_preds = np.argmax(lstm_preds_probs, axis=1)
-
-print(f"\n-> F1-Score của LSTM Multi-flow: {f1_score(y_test_seq, lstm_preds, average='macro'):.4f}")
-print("\n[CHI TIẾT LSTM MULTI-FLOW]")
-print(classification_report(y_test_seq, lstm_preds, target_names=label_encoder.classes_, digits=4, zero_division=0))
+print(f"\n=> KẾT QUẢ: F1-Score Random Forest (Window {window_rf}): {f1_score(y_test_seq_rf, rf_multi_preds, average='macro'):.4f}")
+print(f"\n[BẢNG CHI TIẾT TỪNG LỚP TẤN CÔNG (WINDOW {window_rf})]")
+print(classification_report(y_test_seq_rf, rf_multi_preds, labels=labels_in_test_rf, target_names=names_in_test_rf, digits=4, zero_division=0))

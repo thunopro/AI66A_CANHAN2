@@ -1,5 +1,1 @@
-__marimo__/
 .venv/
-data/
-pyproject.toml
-uv.lock
